@@ -19,6 +19,8 @@ public final class Server {
 
         try {
             ServerBootstrap b = new ServerBootstrap();
+            // NioServerSocketChannel XX 模式；
+
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .childOption(ChannelOption.TCP_NODELAY, true)

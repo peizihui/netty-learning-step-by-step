@@ -36,6 +36,27 @@ https://netty.io/
 服务端；参考ch03代码；server
 
 ```
+     
+       ServerBootstrap b = new ServerBootstrap();
+       // channel(NioServerSocketChannel.class)  11；  
+            b.group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childOption(ChannelOption.TCP_NODELAY, true)
+                    .childAttr(AttributeKey.newInstance("childAttr"), "childAttrValue")
+                    .handler(new ServerHandler())
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        public void initChannel(SocketChannel ch) {
+                            ch.pipeline().addLast(new AuthHandler());
+                            //..
+
+                        }
+                    });
+
+
+     
+     
+     
      ChannelFuture f = b.bind(8888).sync();
 ```
 
@@ -74,5 +95,171 @@ https://netty.io/
 
 
 
+
+
+
+
+```
+// 对应 hannel(NioServerSocketChannel.class) 11的实现；
+public B channel(Class<? extends C> channelClass) {
+    if (channelClass == null) {
+        throw new NullPointerException("channelClass");
+    } else {
+     // NioServerSocketChannel类型的channelClass 通过反射方式创建；
+    return this.channelFactory((io.netty.channel.ChannelFactory)(new ReflectiveChannelFactory(channelClass)));
+    }
+}
+```
+
+
+
+**NioServerSocketChannel **
+
+```
+public class NioServerSocketChannel extends AbstractNioMessageChannel implements 
+ServerSocketChannel
+```
+
+![image-20200426152133058](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426152133058.png)
+
+
+
+
+
+**NioServerSocketChannel  methord**
+
+![image-20200426152420546](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426152420546.png)
+
+
+
+### 2.1.2 反射创建服务端Channel过程；
+
+
+
+
+
+![image-20200426152554417](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426152554417.png)
+
+
+
+
+
+#### 2.1.2.1  newSocket() 
+
+```
+//  1.  NioServerSocketChannel   默认构造函数;
+    public NioServerSocketChannel() {
+        this(newSocket(DEFAULT_SELECTOR_PROVIDER));
+    }
+    
+// 2. NioServerSocketChannel newSocket 具体实现方法； 参数SelectorProvider provider；
+  private static java.nio.channels.ServerSocketChannel newSocket(SelectorProvider provider) {
+        try {
+            return provider.openServerSocketChannel();
+        } catch (IOException var2) {
+            throw new ChannelException("Failed to open a server socket.", var2);
+        }
+    }
+    
+//3. 实现  java.nio.channels.spi.SelectorProvider.openServerSocketChannel 
+
+
+
+```
+
+
+
+####2.1.2.2 NioServerSocketChannelConfig 创建tcp参数配置类
+
+**作用** ： 传递TCP相关的参数；
+
+
+
+
+
+```
+private final class NioServerSocketChannelConfig extends DefaultServerSocketChannelConfig {
+    private NioServerSocketChannelConfig(NioServerSocketChannel channel, ServerSocket javaSocket) {
+        super(channel, javaSocket);
+    }
+
+    protected void autoReadCleared() {
+        NioServerSocketChannel.this.clearReadPending();
+    }
+}
+```
+
+
+
+
+
+####2.1.2.3  AbstractNioChannel
+
+```
+// NioServerSocketChannel 在其默认构造方法中；
+
+public NioServerSocketChannel(java.nio.channels.ServerSocketChannel channel) {
+    super((Channel)null, channel, 16);
+    this.config = new NioServerSocketChannel.NioServerSocketChannelConfig(this, this.javaChannel().socket());
+}
+```
+
+
+
+```
+protected AbstractNioChannel(Channel parent, SelectableChannel ch, int readInterestOp) {
+    super(parent);
+    this.ch = ch;
+    this.readInterestOp = readInterestOp;
+
+    try {
+    // 设置服务端channel非阻塞过程
+    
+        ch.configureBlocking(false);
+    } catch (IOException var7) {
+        try {
+            ch.close();
+        } catch (IOException var6) {
+            if (logger.isWarnEnabled()) {
+                logger.warn("Failed to close a partially initialized socket.", var6);
+            }
+        }
+
+        throw new ChannelException("Failed to enter non-blocking mode.", var7);
+    }
+}
+```
+
+#### 
+
+####2.1.2.4 AbstractChannel
+
+
+
+```
+io.netty.channel
+
+
+protected AbstractChannel(Channel parent) {
+    this.parent = parent;
+    this.id = this.newId();     	 //	id changeID唯一标识；
+    this.unsafe = this.newUnsafe();   // netty 特有方法；
+    this.pipeline = this.newChannelPipeline(); // 和服务端客户端相关的逻辑链；
+}
+```
+
+
+
+**总结**  
+
+- newSocket 反射 创建底层jdk channel 
+- 创建channel 相关的config参数类,tcp
+- 然后configureBlocking（false） 设置为非阻塞模式
+- 一起就绪，创建channel 最重要属性pipeline
+
+
+
 ## 2.2 在哪里accept 连接？
+
+
 
