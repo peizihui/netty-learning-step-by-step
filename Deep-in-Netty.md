@@ -519,9 +519,160 @@ protected void doBind(SocketAddress localAddress) throws Exception {
 
 # 3.1 NioEventLoop 创建
 
+![image-20200426191054733](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426191054733.png)
+
+
+
+
+
 
 
 # 3.2 NioEventLoop 启动
+
+
+
+```
+// 1代表
+EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+// 不传默认为0
+EventLoopGroup workerGroup = new NioEventLoopGroup();
+```
+
+
+
+
+
+
+
+```
+// io.netty.util.concurrent.MultithreadEventExecutorGroup
+
+protected MultithreadEventExecutorGroup(int nThreads, Executor executor, EventExecutorChooserFactory chooserFactory, Object... args) {
+    this.terminatedChildren = new AtomicInteger();
+    this.terminationFuture = new DefaultPromise(GlobalEventExecutor.INSTANCE);
+    if (nThreads <= 0) {
+        throw new IllegalArgumentException(String.format("nThreads: %d (expected: > 0)", nThreads));
+    } else {
+    
+    //Step 1. 创建线程创建器
+    	// 每次执行任务都会创建一个线程实体；	
+        if (executor == null) {
+            executor = new ThreadPerTaskExecutor(this.newDefaultThreadFactory());
+        }
+
+        this.children = new EventExecutor[nThreads];
+
+	//for start 
+	// Step2  构造NioEventLoop   		
+        int j;
+        for(int i = 0; i < nThreads; ++i) {
+            boolean success = false;
+            boolean var18 = false;
+
+            try {
+                var18 = true;
+                this.children[i] = this.newChild((Executor)executor, args);
+                success = true;
+                var18 = false;
+            } catch (Exception var19) {
+                throw new IllegalStateException("failed to create a child event loop", var19);
+            } finally {
+                if (var18) {
+                    if (!success) {
+                        int j;
+                        for(j = 0; j < i; ++j) {
+                            this.children[j].shutdownGracefully();
+                        }
+
+                        for(j = 0; j < i; ++j) {
+                            EventExecutor e = this.children[j];
+
+                            try {
+                                while(!e.isTerminated()) {
+                                    e.awaitTermination(2147483647L, TimeUnit.SECONDS);
+                                }
+                            } catch (InterruptedException var20) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                    }
+
+                }
+            }
+
+            if (!success) {
+                for(j = 0; j < i; ++j) {
+                    this.children[j].shutdownGracefully();
+                }
+
+                for(j = 0; j < i; ++j) {
+                    EventExecutor e = this.children[j];
+
+                    try {
+                        while(!e.isTerminated()) {
+                            e.awaitTermination(2147483647L, TimeUnit.SECONDS);
+                        }
+                    } catch (InterruptedException var22) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
+        // for end;
+        
+
+		//Step 3. chooserFactory.newChooser 创建线程选择器
+        this.chooser chooserFactory.newChooser(this.children);
+        FutureListener<Object> terminationListener = new FutureListener<Object>() {
+            public void operationComplete(Future<Object> future) throws Exception {
+                if (MultithreadEventExecutorGroup.this.terminatedChildren.incrementAndGet() == MultithreadEventExecutorGroup.this.children.length) {
+                    MultithreadEventExecutorGroup.this.terminationFuture.setSuccess((Object)null);
+                }
+
+            }
+        };
+        EventExecutor[] arr$ = this.children;
+        j = arr$.length;
+
+        for(int i$ = 0; i$ < j; ++i$) {
+            EventExecutor e = arr$[i$];
+            e.terminationFuture().addListener(terminationListener);
+        }
+
+        Set<EventExecutor> childrenSet = new LinkedHashSet(this.children.length);
+        Collections.addAll(childrenSet, this.children);
+        this.readonlyChildren = Collections.unmodifiableSet(childrenSet);
+    }
+}
+```
+
+### 3.1.1 ThreadPerTaskExecutor
+
+- 每次执行任务都会创建一个线程实体；
+
+```
+     executor = new ThreadPerTaskExecutor(this.newDefaultThreadFactory());
+```
+
+
+
+​		NioEventLoop线程命名规则nioEventLoop-1-xx;
+
+
+
+### 3.1.2  newchild()
+
+- 保存线程执行器ThreadPerTaskExecutor
+
+- 创建一个MpscQueue
+
+- 创建一个selector
+
+   
+
+  
 
 
 
