@@ -501,9 +501,29 @@ protected void doBind(SocketAddress localAddress) throws Exception {
 }
 ```
 
+
+
 ## 在哪里accept 连接？
 
 
 
+# 3. NioEventLoop
 
+**问题**
+
+- 默认情况下，Netty服务端起多少线程？何时启动？
+- Netty是如果解决jdk空转轮询bug的？ （问题都不明白）
+- Netty如何保证异步串行无锁化？
+
+
+
+# 3.1 NioEventLoop 创建
+
+
+
+# 3.2 NioEventLoop 启动
+
+
+
+#3.3 NioEventLoop 执行逻辑
 
