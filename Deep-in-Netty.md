@@ -234,6 +234,8 @@ protected AbstractNioChannel(Channel parent, SelectableChannel ch, int readInter
 
 ####2.1.2.4 AbstractChannel
 
+ 			服务端，客户端都要继承该channel;
+
 
 
 ```
@@ -259,7 +261,249 @@ protected AbstractChannel(Channel parent) {
 
 
 
-## 2.2 在哪里accept 连接？
+###2.2  初始化服务端Channel
+
+`
+
+![image-20200426164740637](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426164740637.png)
+
+# 
+
+
+
+### 2.2.1
+
+
+
+
+
+
+
+## 2.3 注册selector
+
+![image-20200426171529518](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426171529518.png)
+
+##  
+
+
+
+```
+// io.netty.channel.AbstractChannel
+
+public final void register(EventLoop eventLoop, final ChannelPromise promise) {
+    if (eventLoop == null) {
+        throw new NullPointerException("eventLoop");
+    } else if (AbstractChannel.this.isRegistered()) {
+        promise.setFailure(new IllegalStateException("registered to an event loop already"));
+    } else if (!AbstractChannel.this.isCompatible(eventLoop)) {
+        promise.setFailure(new IllegalStateException("incompatible event loop type: " + eventLoop.getClass().getName()));
+    } else 
+    		// Step1. 绑定线程；简单的赋值操作，告诉channel所有的事件IO操作交给eventLoop 处理；
+        AbstractChannel.this.eventLoop = eventLoop;
+        if (eventLoop.inEventLoop()) {
+         	//Step2. 实际注册；
+            this.register0(promise);
+        } else {
+            try {
+                eventLoop.execute(new Runnable() {
+                    public void run() {
+                        AbstractUnsafe.this.register0(promise);
+                    }
+                });
+            } catch (Throwable var4) {
+                AbstractChannel.logger.warn("Force-closing a channel whose registration task was not accepted by an event loop: {}", AbstractChannel.this, var4);
+                this.closeForcibly();
+                AbstractChannel.this.closeFuture.setClosed();
+                this.safeSetFailure(promise, var4);
+            }
+        }
+
+    }
+}
+```
+
+
+
+**register0**
+
+```
+// AbstractChannel
+// 跟着Step2    this.register0(promise);
+private void register0(ChannelPromise promise) {
+    try {
+        if (!promise.setUncancellable() || !this.ensureOpen(promise)) {
+            return;
+        }
+
+        boolean firstRegistration = this.neverRegistered;
+        //Step2.1 调用JDK底层事件；
+        AbstractChannel.this.doRegister();
+        this.neverRegistered = false;
+        AbstractChannel.this.registered = true;
+        //Step2.2  事件回调，添加chanleHanlder到channel的时候，添加用户回调；
+        AbstractChannel.this.pipeline.invokeHandlerAddedIfNeeded();
+        this.safeSetSuccess(promise);
+        //Step2.3 把channel注册成功这个事件，传播到用户的代码中；
+        AbstractChannel.this.pipeline.fireChannelRegistered();
+        if (AbstractChannel.this.isActive()) {
+            if (firstRegistration) {
+                AbstractChannel.this.pipeline.fireChannelActive();
+            } else if (AbstractChannel.this.config().isAutoRead()) {
+                this.beginRead();
+            }
+        }
+    } catch (Throwable var3) {
+        this.closeForcibly();
+        AbstractChannel.this.closeFuture.setClosed();
+        this.safeSetFailure(promise, var3);
+    }
+
+}
+```
+
+
+
+**AbstractChannel.this.doRegister() 紧跟上面代码Step2.1**
+
+```
+// 
+
+protected void doRegister() throws Exception {
+    boolean selected = false;
+
+    while(true) {
+        try {
+           // 注册selector 调用jdk底层selector方法；
+           // javaChannel 2.1所讲创建channel会创建一个jdk底层的channel;
+           // 参数意义
+           		1. selector
+           		2. 注册时关心的事件，0，代表不关心任何时事件；
+           		3.  this 代表服务端channel,通过txshahment ,绑定到selector
+           
+            this.selectionKey = this.javaChannel().register(this.eventLoop().selector, 0, this);
+            return;
+        } catch (CancelledKeyException var3) {
+            if (selected) {
+                throw var3;
+            }
+
+            this.eventLoop().selectNow();
+            selected = true;
+        }
+    }
+}
+```
+
+## 2.4 端口绑定；
+
+![image-20200426180222110](Deep-in-Netty.assets/image-20200426180222110.png)
+
+
+
+
+
+
+
+```
+// io.netty.bootstrap.AbstractBootstrap
+
+// Step1.
+private ChannelFuture doBind(final SocketAddress localAddress) {
+    final ChannelFuture regFuture = this.initAndRegister();
+    final Channel channel = regFuture.channel();
+    if (regFuture.cause() != null) {
+        return regFuture;
+    } else if (regFuture.isDone()) {
+        ChannelPromise promise = channel.newPromise();
+        doBind0(regFuture, channel, localAddress, promise);
+        return promise;
+    } else {
+        final AbstractBootstrap.PendingRegistrationPromise promise = new AbstractBootstrap.PendingRegistrationPromise(channel);
+        regFuture.addListener(new ChannelFutureListener() {
+            public void operationComplete(ChannelFuture future) throws Exception {
+                Throwable cause = future.cause();
+                if (cause != null) {
+                    promise.setFailure(cause);
+                } else {
+                    promise.registered();
+                    AbstractBootstrap.doBind0(regFuture, channel, localAddress, promise);
+                }
+
+            }
+        });
+        return promise;
+、、    }
+}
+```
+
+
+
+
+
+
+
+
+
+```
+// io.netty.channel.AbstractChannel 方法；
+
+
+public final void bind(SocketAddress localAddress, ChannelPromise promise) {
+    this.assertEventLoop();
+    if (promise.setUncancellable() && this.ensureOpen(promise)) {
+        if (Boolean.TRUE.equals(AbstractChannel.this.config().getOption(ChannelOption.SO_BROADCAST)) && localAddress instanceof InetSocketAddress && !((InetSocketAddress)localAddress).getAddress().isAnyLocalAddress() && !PlatformDependent.isWindows() && !PlatformDependent.isRoot()) {
+            AbstractChannel.logger.warn("A non-root user can't receive a broadcast packet if the socket is not bound to a wildcard address; binding to a non-wildcard address (" + localAddress + ") anyway as requested.");
+        }
+		// 端口绑定未完成此时返回false;
+        boolean wasActive = AbstractChannel.this.isActive();
+
+        try {
+        // Step5 绑定底层JDK方法；
+            AbstractChannel.this.doBind(localAddress);
+        } catch (Throwable var5) {
+            this.safeSetFailure(promise, var5);
+            this.closeIfClosed();
+            return;
+        }
+		// 传播事件；端口绑定之前不是active(true)，端口绑定之后是active,返回true;
+		// 此时触发channelActive事件；
+		// 从pipeline开始传播；
+		
+        if (!wasActive && AbstractChannel.this.isActive()) {
+            this.invokeLater(new Runnable() {
+                public void run() {
+                    AbstractChannel.this.pipeline.fireChannelActive();
+                }
+            });
+        }
+
+        this.safeSetSuccess(promise);
+    }
+}
+```
+
+
+
+**紧跟上面Step5**
+
+```
+// io.netty.channel.socket.nio.NioServerSocketChannel;
+
+protected void doBind(SocketAddress localAddress) throws Exception {
+    if (PlatformDependent.javaVersion() >= 7) {
+    // 创建jdk channel ，端口进行绑定；
+        this.javaChannel().bind(localAddress, this.config.getBacklog());
+    } else {
+    // 
+        this.javaChannel().socket().bind(localAddress, this.config.getBacklog());
+    }
+
+}
+```
+
+## 在哪里accept 连接？
+
+
 
 
 
