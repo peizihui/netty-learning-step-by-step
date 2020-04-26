@@ -209,6 +209,14 @@ private static boolean isPowerOfTwo(int val) {
 
 
 
+![image-20200427073450761](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200427073450761.png)
+
+
+
+![image-20200427073605397](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200427073605397.png)
+
+
+
 - 服务端启动绑定端口
 - 新连接接入通过chooser绑定一个NioEventLoop 
 
@@ -469,6 +477,7 @@ run() -> for(;;)
                         continue;
                     case -1:
                     // 轮询注册到selector 的IO事件
+                    // 标注进行select操作，而且是未唤醒状态；
                         this.select(this.wakenUp.getAndSet(false));
                         if (this.wakenUp.get()) {
                             this.selector.wakeup();
@@ -545,7 +554,120 @@ run() -> for(;;)
 
 
 
+```
+ protected void run() {
+        while(true) {
+            while(true) {
+                try {
+                    switch(this.selectStrategy.calculateStrategy(this.selectNowSupplier, this.hasTasks())) {
+                    case -2:
+                        continue;
+                    case -1:
+                    // 轮询注册到selector 的IO事件
+                    // 标注进行select操作，而且是未唤醒状态；
+                        this.select(this.wakenUp.getAndSet(false));
+                        if (this.wakenUp.get()) {
+                            this.selector.wakeup();
+                        }
+                    default:
+                        this.cancelledKeys = 0;
+                        this.needsToSelectAgain = false;
+                        //  this.ioRatio 没有设置默认50；
+                        int ioRatio = this.ioRatio;
+                       // 
+                        if (ioRatio == 100) {
+                            try {
+                            // 处理IO相关的逻辑
+                                this.processSelectedKeys();
+                            } finally {
+                            // 处理外部线程扔到taskqu 里面的任务；
+                                this.runAllTasks();
+                            }
+                        } else {
+```
 
+**总结** 以上代码注意两点
+
+```
+// 轮询注册到selector的IO事件
+// 标注进行select操作，而且是未唤醒状态；
+```
+
+
+
+```
+// io.netty.channel.nio.NioEventLoop;
+
+
+private void select(boolean oldWakenUp) throws IOException {
+    Selector selector = this.selector;
+
+    try {
+        int selectCnt = 0;
+        long currentTimeNanos = System.nanoTime();
+        //  delayNanos 计算第一个定时任务执行的时间；
+        long selectDeadLineNanos = currentTimeNanos + this.delayNanos(currentTimeNanos);
+
+	   // 计算当前是否超时，如果超时，一次没有进行select的话，
+        while(true) {
+            long timeoutMillis = (selectDeadLineNanos - currentTimeNanos + 500000L) / 1000000L;
+            // 如果超时的，一次没有select的话，就进行一次非阻塞的select方法；
+            if (timeoutMillis <= 0L) {
+                if (selectCnt == 0) {
+                    selector.selectNow();
+                    selectCnt = 1;
+                }
+                break;
+            }
+
+			// 
+            if (this.hasTasks() && this.wakenUp.compareAndSet(false, true)) {
+                selector.selectNow();
+                selectCnt = 1;
+                break;
+            }
+
+            int selectedKeys = selector.select(timeoutMillis);
+            ++selectCnt;
+            if (selectedKeys != 0 || oldWakenUp || this.wakenUp.get() || this.hasTasks() || this.hasScheduledTasks()) {
+                break;
+            }
+
+            if (Thread.interrupted()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Selector.select() returned prematurely because Thread.currentThread().interrupt() was called. Use NioEventLoop.shutdownGracefully() to shutdown the NioEventLoop.");
+                }
+
+                selectCnt = 1;
+                break;
+            }
+
+            long time = System.nanoTime();
+            if (time - TimeUnit.MILLISECONDS.toNanos(timeoutMillis) >= currentTimeNanos) {
+                selectCnt = 1;
+            } else if (SELECTOR_AUTO_REBUILD_THRESHOLD > 0 && selectCnt >= SELECTOR_AUTO_REBUILD_THRESHOLD) {
+                logger.warn("Selector.select() returned prematurely {} times in a row; rebuilding Selector {}.", selectCnt, selector);
+                this.rebuildSelector();
+                selector = this.selector;
+                selector.selectNow();
+                selectCnt = 1;
+                break;
+            }
+
+            currentTimeNanos = time;
+        }
+
+        if (selectCnt > 3 && logger.isDebugEnabled()) {
+            logger.debug("Selector.select() returned prematurely {} times in a row for Selector {}.", selectCnt - 1, selector);
+        }
+    } catch (CancelledKeyException var13) {
+        if (logger.isDebugEnabled()) {
+            logger.debug(CancelledKeyException.class.getSimpleName() + " raised by a Selector {} - JDK bug?", selector, var13);
+        }
+    }
+
+}
+```
 
 
 
