@@ -1,4 +1,4 @@
-# 0.overview
+
 
 **定义作用** ：
 
@@ -670,11 +670,363 @@ protected MultithreadEventExecutorGroup(int nThreads, Executor executor, EventEx
 
 - 创建一个selector
 
-   
+  ```
+  this.chooser = chooserFactory.newChooser(this.children);
+  ```
 
+- ```
+  // io.netty.util.concurrent.DefaultEventExecutorChooserFactory
   
+  
+  public EventExecutorChooser newChooser(EventExecutor[] executors) {
+          return (EventExecutorChooser)(isPowerOfTwo(executors.length) ? 
+  // 优化
+  new DefaultEventExecutorChooserFactory.PowerOfTowEventExecutorChooser(executors) :
+  // 普通        
+  new DefaultEventExecutorChooserFactory.GenericEventExecutorChooser(executors));
+      }
+      
+  
+  
+  
+  
+  ```
+
+
+
+**判断是否是二的幂**
+
+```
+private static boolean isPowerOfTwo(int val) {
+    return (val & -val) == val;
+}
+```
+
+
+
+**PowerOfTowEventExecutorChooser() 是如何优化的**;
+
+- & 运算比%运算更高效；
+
+
+
+![image-20200426211600047](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426211600047.png)
+
+
+
+### 3.1.3 NioEventLoop 启动
+
+
+
+- 服务端启动绑定端口
+- 新连接接入通过chooser绑定一个NioEventLoop 
+
+
+
+#### 3.1.3.1 服务端启动绑定端口
+
+
+
+
+
+![image-20200426212051546](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426212051546.png)
+
+
+
+
+
+
+
+```
+
+// io.netty.bootstrap.AbstractBootstrap
+
+
+private static void doBind0(final ChannelFuture regFuture, final Channel channel, final SocketAddress localAddress, final ChannelPromise promise) {
+
+// 调用channel.eventLoop,在netty启动过程中，通过register()方法绑定上去
+
+
+
+
+//Step 3.1.3 -2   new Runnable 其实是一个Task，
+ channel.eventLoop().execute(new Runnable() {
+        public void run() {
+            if (regFuture.isSuccess()) {
+ // Task 做什么事情，其实就是绑定端口           
+ channel.bind(localAddress, promise).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+            } else {
+                promise.setFailure(regFuture.cause());
+            }
+
+        }
+    });
+
+
+}
+```
+
+
+
+**紧跟上文代码Step 3.1.3 -2   new Runnable 其实是一个Task**
+
+**io.netty.util.concurrent.SingleThreadEventExecutor**
+
+****
+
+```
+//io.netty.util.concurrent.SingleThreadEventExecutor
+
+public void execute(Runnable task) {
+    if (task == null) {
+        throw new NullPointerException("task");
+    } else {
+      //Step 3.1.3 -2-1 判断是不是·
+      //  inEventLoop 线程没有创建，
+        boolean inEventLoop = this.inEventLoop();
+        if (inEventLoop) {
+            this.addTask(task);
+        } else {
+        //Step 3.1.3 -2-2 程开始创建；
+            this.startThread();
+            this.addTask(task);
+            if (this.isShutdown() && this.removeTask(task)) {
+                reject();
+            }
+        }
+
+        if (!this.addTaskWakesUp && this.wakesUpForTask(task)) {
+            this.wakeup(inEventLoop);
+        }
+
+    }
+}
+```
+
+**io.netty.util.concurrent.SingleThreadEventExecutor**
+
+**startThread    // 紧跟 Step 3.1.3 -2-2 程开始创建**
+
+```
+// 判断当前线程是否未创建
+private void startThread() {
+// 如果未启动，通过CS的方法进行线程的启动；
+        if (STATE_UPDATER.get(this) == 1 && STATE_UPDATER.compareAndSet(this, 1, 2)) {
+        // 创建线程；
+        //  紧跟 Step 3.1.3 -2-3 开始新的线程
+            this.doStartThread();
+        }
+
+    }
+```
+
+
+
+
+
+**io.netty.util.concurrent.SingleThreadEventExecutor**
+
+```
+private void doStartThread() {
+		// 断言，启动线程，线程是以前没有创建的；
+    assert this.thread == null;
+    
+    // executor ,前面创建Nio
+	// 
+    this.executor.execute(new Runnable() {
+        public void run() {
+            SingleThreadEventExecutor.this.thread = Thread.currentThread();
+            if (SingleThreadEventExecutor.this.interrupted) {
+                SingleThreadEventExecutor.this.thread.interrupt();
+            }
+
+            boolean success = false;
+            SingleThreadEventExecutor.this.updateLastExecutionTime();
+            boolean var112 = false;
+
+            int oldState;
+            label1686: {
+                try {
+                    var112 = true;
+                    SingleThreadEventExecutor.this.run();
+                    success = true;
+                    var112 = false;
+                    break label1686;
+                } catch (Throwable var119) {
+                    SingleThreadEventExecutor.logger.warn("Unexpected exception from an event executor: ", var119);
+                    var112 = false;
+                } finally {
+                    if (var112) {
+                        int oldStatex;
+                        do {
+                            oldStatex = SingleThreadEventExecutor.STATE_UPDATER.get(SingleThreadEventExecutor.this);
+                        } while(oldStatex < 3 && !SingleThreadEventExecutor.STATE_UPDATER.compareAndSet(SingleThreadEventExecutor.this, oldStatex, 3));
+
+                        if (success && SingleThreadEventExecutor.this.gracefulShutdownStartTime == 0L) {
+                            SingleThreadEventExecutor.logger.error("Buggy " + EventExecutor.class.getSimpleName() + " implementation; " + SingleThreadEventExecutor.class.getSimpleName() + ".confirmShutdown() must be called " + "before run() implementation terminates.");
+                        }
+
+                        try {
+                            while(!SingleThreadEventExecutor.this.confirmShutdown()) {
+                            }
+                        } finally {
+                            try {
+                                SingleThreadEventExecutor.this.cleanup();
+                            } finally {
+                                SingleThreadEventExecutor.STATE_UPDATER.set(SingleThreadEventExecutor.this, 5);
+                                SingleThreadEventExecutor.this.threadLock.release();
+                                if (!SingleThreadEventExecutor.this.taskQueue.isEmpty()) {
+                                    SingleThreadEventExecutor.logger.warn("An event executor terminated with non-empty task queue (" + SingleThreadEventExecutor.this.taskQueue.size() + ')');
+                                }
+
+                                SingleThreadEventExecutor.this.terminationFuture.setSuccess((Object)null);
+                            }
+                        }
+
+                    }
+                }
+
+                do {
+                    oldState = SingleThreadEventExecutor.STATE_UPDATER.get(SingleThreadEventExecutor.this);
+                } while(oldState < 3 && !SingleThreadEventExecutor.STATE_UPDATER.compareAndSet(SingleThreadEventExecutor.this, oldState, 3));
+
+                if (success && SingleThreadEventExecutor.this.gracefulShutdownStartTime == 0L) {
+                    SingleThreadEventExecutor.logger.error("Buggy " + EventExecutor.class.getSimpleName() + " implementation; " + SingleThreadEventExecutor.class.getSimpleName() + ".confirmShutdown() must be called " + "before run() implementation terminates.");
+                }
+
+                try {
+                    while(!SingleThreadEventExecutor.this.confirmShutdown()) {
+                    }
+
+                    return;
+                } finally {
+                    try {
+                        SingleThreadEventExecutor.this.cleanup();
+                    } finally {
+                        SingleThreadEventExecutor.STATE_UPDATER.set(SingleThreadEventExecutor.this, 5);
+                        SingleThreadEventExecutor.this.threadLock.release();
+                        if (!SingleThreadEventExecutor.this.taskQueue.isEmpty()) {
+                            SingleThreadEventExecutor.logger.warn("An event executor terminated with non-empty task queue (" + SingleThreadEventExecutor.this.taskQueue.size() + ')');
+                        }
+
+                        SingleThreadEventExecutor.this.terminationFuture.setSuccess((Object)null);
+                    }
+                }
+            }
+
+            do {
+                oldState = SingleThreadEventExecutor.STATE_UPDATER.get(SingleThreadEventExecutor.this);
+            } while(oldState < 3 && !SingleThreadEventExecutor.STATE_UPDATER.compareAndSet(SingleThreadEventExecutor.this, oldState, 3));
+
+            if (success && SingleThreadEventExecutor.this.gracefulShutdownStartTime == 0L) {
+                SingleThreadEventExecutor.logger.error("Buggy " + EventExecutor.class.getSimpleName() + " implementation; " + SingleThreadEventExecutor.class.getSimpleName() + ".confirmShutdown() must be called " + "before run() implementation terminates.");
+            }
+
+            try {
+                while(!SingleThreadEventExecutor.this.confirmShutdown()) {
+                }
+            } finally {
+                try {
+                    SingleThreadEventExecutor.this.cleanup();
+                } finally {
+                    SingleThreadEventExecutor.STATE_UPDATER.set(SingleThreadEventExecutor.this, 5);
+                    SingleThreadEventExecutor.this.threadLock.release();
+                    if (!SingleThreadEventExecutor.this.taskQueue.isEmpty()) {
+                        SingleThreadEventExecutor.logger.warn("An event executor terminated with non-empty task queue (" + SingleThreadEventExecutor.this.taskQueue.size() + ')');
+                    }
+
+                    SingleThreadEventExecutor.this.terminationFuture.setSuccess((Object)null);
+                }
+            }
+
+        }
+    });
+}
+
+
+```
+
+####3.1.3.2 新连接接入通过chooser绑定一个NioEventLoop
+
+
 
 
 
 #3.3 NioEventLoop 执行逻辑
 
+### 3.3.1  NioEventLoop.run(); 
+
+![image-20200426230319128](http://q8xc9za4f.bkt.clouddn.com/cloudflare/image-20200426230319128.png)
+
+```
+run() -> for(;;)
+```
+
+
+
+**io.netty.channel.nio.NioEventLoop**
+
+
+
+```
+ protected void run() {
+        while(true) {
+            while(true) {
+                try {
+                    switch(this.selectStrategy.calculateStrategy(this.selectNowSupplier, this.hasTasks())) {
+                    case -2:
+                        continue;
+                    case -1:
+                        this.select(this.wakenUp.getAndSet(false));
+                        if (this.wakenUp.get()) {
+                            this.selector.wakeup();
+                        }
+                    default:
+                        this.cancelledKeys = 0;
+                        this.needsToSelectAgain = false;
+                        int ioRatio = this.ioRatio;
+                        if (ioRatio == 100) {
+                            try {
+                                this.processSelectedKeys();
+                            } finally {
+                                this.runAllTasks();
+                            }
+                        } else {
+                            long ioStartTime = System.nanoTime();
+                            boolean var13 = false;
+
+                            try {
+                                var13 = true;
+                                this.processSelectedKeys();
+                                var13 = false;
+                            } finally {
+                                if (var13) {
+                                    long ioTime = System.nanoTime() - ioStartTime;
+                                    this.runAllTasks(ioTime * (long)(100 - ioRatio) / (long)ioRatio);
+                                }
+                            }
+
+                            long ioTime = System.nanoTime() - ioStartTime;
+                            this.runAllTasks(ioTime * (long)(100 - ioRatio) / (long)ioRatio);
+                        }
+                    }
+                } catch (Throwable var21) {
+                    handleLoopException(var21);
+                }
+
+                try {
+                    if (this.isShuttingDown()) {
+                        this.closeAll();
+                        if (this.confirmShutdown()) {
+                            return;
+                        }
+                    }
+                } catch (Throwable var18) {
+                    handleLoopException(var18);
+                }
+            }
+        }
+    }
+
+
+```
