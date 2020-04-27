@@ -680,3 +680,101 @@ private void select(boolean oldWakenUp) throws IOException {
 
 
 ### 3.4.3 避免jdk空轮询的bug
+
+
+
+
+
+
+
+### 3.4.4   processSelectedKey() 执行逻辑
+
+####3.4.4 .1  selected keySet 优化
+
+
+
+
+
+#### 3.4.4 .2  processSelectedKeysOptimized()
+
+
+
+
+
+# 4.runAllTasks() 执行逻辑
+
+## 4.1  task的分类和添加
+
+
+
+**io.netty.channel.nio.NioEventLoop**
+
+```
+NioEventLoop(NioEventLoopGroup parent, Executor executor, SelectorProvider selectorProvider,
+             SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler,
+             EventLoopTaskQueueFactory queueFactory) {
+     //Step 4.1 -1
+    super(parent, executor, false, newTaskQueue(queueFactory), newTaskQueue(queueFactory),
+            rejectedExecutionHandler);
+    this.provider = ObjectUtil.checkNotNull(selectorProvider, "selectorProvider");
+    this.selectStrategy = ObjectUtil.checkNotNull(strategy, "selectStrategy");
+    final SelectorTuple selectorTuple = openSelector();
+    this.selector = selectorTuple.selector;
+    this.unwrappedSelector = selectorTuple.unwrappedSelector;
+}
+```
+
+**Step 4.1 -1 方法实现**
+
+```
+protected SingleThreadEventLoop(EventLoopGroup parent, Executor executor,
+                                boolean addTaskWakesUp, Queue<Runnable> taskQueue, Queue<Runnable> tailTaskQueue,
+                                RejectedExecutionHandler rejectedExecutionHandler) {
+    //Step 4.1 -2                            
+    super(parent, executor, addTaskWakesUp, taskQueue, rejectedExecutionHandler);
+    tailTasks = ObjectUtil.checkNotNull(tailTaskQueue, "tailTaskQueue");
+}
+```
+
+
+
+
+
+**Step 4.1 -2 具体实现**
+
+```
+// io.netty.util.concurrent.SingleThreadEventExecutor
+
+
+protected SingleThreadEventExecutor(EventExecutorGroup parent, Executor executor,
+                                    boolean addTaskWakesUp, Queue<Runnable> taskQueue,
+                                    RejectedExecutionHandler rejectedHandler) {
+    super(parent);
+    this.addTaskWakesUp = addTaskWakesUp;
+    this.maxPendingTasks = DEFAULT_MAX_PENDING_EXECUTOR_TASKS;
+    this.executor = ThreadExecutorMap.apply(executor, this);
+    this.taskQueue = ObjectUtil.checkNotNull(taskQueue, "taskQueue");
+    this.rejectedExecutionHandler = ObjectUtil.checkNotNull(rejectedHandler, "rejectedHandler");
+}
+```
+
+### 4.1.1 普通task
+
+###4.1.2 定时任务task
+
+## 4.2 任务的聚合
+
+​          定时任务task，聚合到普通task里面；
+
+
+
+
+
+## 4.3 任务的执行
+
+
+
+
+
+
+
